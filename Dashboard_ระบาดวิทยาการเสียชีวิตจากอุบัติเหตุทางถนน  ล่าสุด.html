@@ -1,0 +1,1215 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบเฝ้าระวังทางระบาดวิทยา การเสียชีวิตจากอุบัติเหตุทางถนน (RTI Surveillance System)</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts - Kanit & Sarabun -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Esri ArcGIS API for JavaScript v4.29 -->
+    <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css">
+    <script src="https://js.arcgis.com/4.29/"></script>
+    
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- PapaParse CDN for CSV Parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+    <script>
+        // Global error handling guard to suppress cross-origin sandbox warnings
+        window.onerror = function(msg, url, line, col, error) {
+            console.warn("Script status:", msg, "at line", line);
+            return true;
+        };
+
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4',
+                            100: '#dcfce7',
+                            500: '#16a34a',
+                            600: '#15803d',
+                            700: '#166534',
+                            800: '#115e59',
+                            900: '#064e3b',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Kanit', 'Sarabun', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        body { font-family: 'Kanit', 'Sarabun', sans-serif; background-color: #f8fafc; }
+        #mapView { width: 100%; height: 520px; border-radius: 0.75rem; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .pulse-indicator { animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }
+        .esri-popup__main-container { border-radius: 12px !important; overflow: hidden; }
+    </style>
+</head>
+<body class="text-slate-800 antialiased min-h-screen flex flex-col">
+
+    <!-- Top Navigation Header -->
+    <header class="bg-slate-900 text-white shadow-md sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div class="flex items-center space-x-3">
+                    <div class="p-2.5 bg-emerald-600 rounded-xl text-white shadow">
+                        <i class="fa-solid fa-map-location-dot text-2xl"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-lg md:text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                            ระบบเฝ้าระวังทางระบาดวิทยา การเสียชีวิตจากอุบัติเหตุทางถนน
+                            <span class="text-xs font-normal bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2.5 py-0.5 rounded-full">Acc La & Acclong Real-time Mapping</span>
+                        </h1>
+                        <p class="text-xs text-slate-400">ระบบประมวลผลตำแหน่งพิกัดจุดเกิดเหตุอัตโนมัติ จากฐานข้อมูลระบาดวิทยาการบาดเจ็บ</p>
+                    </div>
+                </div>
+
+                <!-- Live Sync Controls -->
+                <div class="flex flex-wrap items-center gap-2 text-xs">
+                    <div class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 flex items-center gap-2">
+                        <span id="syncStatusDot" class="w-2.5 h-2.5 rounded-full bg-emerald-500 pulse-indicator"></span>
+                        <span id="syncStatusText" class="text-slate-300 font-medium">เชื่อมต่อพิกัดสมบูรณ์</span>
+                        <span class="text-slate-600">|</span>
+                        <span id="lastUpdateText" class="text-slate-400">อัปเดตล่าสุด: -</span>
+                    </div>
+
+                    <div class="flex items-center space-x-1 bg-slate-800 border border-slate-700 rounded-lg p-1">
+                        <button id="btnRefresh" onclick="fetchLiveCSVData()" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-medium transition flex items-center gap-1.5 shadow">
+                            <i id="refreshIcon" class="fa-solid fa-rotate"></i>
+                            <span>รีเฟรชข้อมูล</span>
+                        </button>
+                        <select id="autoRefreshInterval" onchange="changeAutoRefresh()" class="bg-slate-900 text-slate-300 border border-slate-700 rounded px-2 py-1 focus:outline-none focus:border-emerald-500">
+                            <option value="0">ปิด Sync</option>
+                            <option value="30000" selected>30 วินาที</option>
+                            <option value="60000">1 นาที</option>
+                            <option value="300000">5 นาที</option>
+                        </select>
+                    </div>
+
+                    <button onclick="toggleDataModal()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg font-medium transition flex items-center gap-1.5">
+                        <i class="fa-solid fa-link text-emerald-400"></i>
+                        <span>ตั้งค่า Google Sheet</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Container -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full">
+
+        <!-- Key Indicators (KPI Cards) -->
+        <section class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 relative overflow-hidden">
+                <div class="absolute right-3 top-3 text-red-100"><i class="fa-solid fa-circle-xmark text-4xl"></i></div>
+                <p class="text-xs font-medium text-slate-500 uppercase tracking-wider">ผู้เสียชีวิตรวม</p>
+                <h3 id="kpiTotalFatalities" class="text-2xl font-bold text-red-600 mt-1">0</h3>
+                <p class="text-[11px] text-slate-400 mt-1"><span class="text-red-500 font-semibold"><i class="fa-solid fa-triangle-exclamation"></i> รายงานสะสม</span></p>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 relative overflow-hidden">
+                <div class="absolute right-3 top-3 text-emerald-100"><i class="fa-solid fa-location-pin text-4xl"></i></div>
+                <p class="text-xs font-medium text-slate-500 uppercase tracking-wider">ปักจุดพิกัดสำเร็จ</p>
+                <h3 id="kpiMappedPoints" class="text-2xl font-bold text-emerald-600 mt-1">0</h3>
+                <p id="kpiMappedPct" class="text-[11px] text-slate-400 mt-1">จาก Acc La / Acclong</p>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 relative overflow-hidden">
+                <div class="absolute right-3 top-3 text-blue-100"><i class="fa-solid fa-venus-mars text-4xl"></i></div>
+                <p class="text-xs font-medium text-slate-500 uppercase tracking-wider">สัดส่วน ชาย:หญิง</p>
+                <h3 id="kpiSexRatio" class="text-2xl font-bold text-slate-800 mt-1">0:0</h3>
+                <p class="text-[11px] text-slate-400 mt-1">เพศชายเสี่ยงสูงกว่า</p>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 relative overflow-hidden">
+                <div class="absolute right-3 top-3 text-amber-100"><i class="fa-solid fa-motorcycle text-4xl"></i></div>
+                <p class="text-xs font-medium text-slate-500 uppercase tracking-wider">ยานพาหนะเกิดเหตุหลัก</p>
+                <h3 id="kpiTopVehicle" class="text-lg font-bold text-amber-700 mt-1 truncate">-</h3>
+                <p id="kpiTopVehiclePct" class="text-[11px] text-slate-400 mt-1">0% ของเคสทั้งหมด</p>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 relative overflow-hidden">
+                <div class="absolute right-3 top-3 text-purple-100"><i class="fa-solid fa-user-clock text-4xl"></i></div>
+                <p class="text-xs font-medium text-slate-500 uppercase tracking-wider">กลุ่มอายุเสี่ยงสูง</p>
+                <h3 id="kpiHighRiskAge" class="text-lg font-bold text-purple-700 mt-1 truncate">-</h3>
+                <p class="text-[11px] text-slate-400 mt-1">กลุ่มเสี่ยงระบาดวิทยา</p>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 relative overflow-hidden">
+                <div class="absolute right-3 top-3 text-rose-100"><i class="fa-solid fa-triangle-exclamation text-4xl"></i></div>
+                <p class="text-xs font-medium text-slate-500 uppercase tracking-wider">ปัจจัยเสี่ยงหลัก</p>
+                <h3 id="kpiTopRisk" class="text-lg font-bold text-rose-700 mt-1 truncate">-</h3>
+                <p id="kpiTopRiskSub" class="text-[11px] text-slate-400 mt-1">พฤติกรรมเสี่ยง</p>
+            </div>
+        </section>
+
+        <!-- Filters Section -->
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
+            <div class="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-filter text-emerald-600"></i>
+                    <h2 class="font-semibold text-slate-800 text-sm">ตัวกรองข้อมูลเชิงระบาดวิทยาและจุดเกิดเหตุ (Epidemiological Data Filters)</h2>
+                </div>
+                <button onclick="resetFilters()" class="text-xs text-slate-500 hover:text-emerald-600 transition flex items-center gap-1">
+                    <i class="fa-solid fa-rotate-left"></i> ล้างตัวกรองทั้งหมด
+                </button>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
+                <div>
+                    <label class="block text-slate-500 font-medium mb-1">พื้นที่ (จังหวัด)</label>
+                    <select id="filterProvince" onchange="applyFilters()" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                        <option value="ALL">ทั้งหมดทุกจังหวัด</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-slate-500 font-medium mb-1">ประเภทยานพาหนะ</label>
+                    <select id="filterVehicle" onchange="applyFilters()" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                        <option value="ALL">ทุกยานพาหนะ</option>
+                        <option value="จักรยานยนต์">รถจักรยานยนต์</option>
+                        <option value="รถยนต์">รถยนต์ส่วนบุคคล</option>
+                        <option value="รถกระบะ">รถกระบะ</option>
+                        <option value="รถบรรทุก">รถบรรทุก / รถใหญ่</option>
+                        <option value="คนเดินเท้า">คนเดินเท้า</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-slate-500 font-medium mb-1">กลุ่มอายุ</label>
+                    <select id="filterAgeGroup" onchange="applyFilters()" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                        <option value="ALL">ทุกกลุ่มอายุ</option>
+                        <option value="0-14">เด็ก (0 - 14 ปี)</option>
+                        <option value="15-24">เยาวชน (15 - 24 ปี)</option>
+                        <option value="25-59">วัยทำงาน (25 - 59 ปี)</option>
+                        <option value="60+">ผู้สูงอายุ (60 ปีขึ้นไป)</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-slate-500 font-medium mb-1">ปัจจัยเสี่ยงหลัก</label>
+                    <select id="filterRisk" onchange="applyFilters()" class="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                        <option value="ALL">ทุกปัจจัยเสี่ยง</option>
+                        <option value="ไม่สวมหมวก">ไม่สวมหมวกนิรภัย</option>
+                        <option value="ดื่มแล้วขับ">ดื่มแล้วขับ / สุรา</option>
+                        <option value="ขับรถเร็ว">ขับรถเร็วเกินกำหนด</option>
+                        <option value="ไม่คาดเข็มขัด">ไม่คาดเข็มขัดนิรภัย</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-slate-500 font-medium mb-1">ค้นหาข้อความ / เคส</label>
+                    <div class="relative">
+                        <input type="text" id="filterSearch" onkeyup="applyFilters()" placeholder="ค้นหา รหัส, อำเภอ, เหตุการณ์..." class="w-full border border-slate-300 rounded-lg pl-8 pr-3 py-2 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                        <i class="fa-solid fa-magnifying-glass absolute left-2.5 top-2.5 text-slate-400"></i>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Geographic ArcGIS Map Analysis Section -->
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <div>
+                    <h2 class="font-bold text-slate-800 text-base flex items-center gap-2">
+                        <i class="fa-solid fa-map-marked-alt text-emerald-600"></i>
+                        แผนที่ภูมิสารสนเทศปักจุดเกิดเหตุ (ESRI ArcGIS Spatial Analysis - Acc La & Acclong)
+                    </h2>
+                    <p class="text-xs text-slate-500">แสดงตำแหน่งพิกัดจุดเกิดเหตุจริงจากคอลัมน์ <code class="bg-slate-100 text-emerald-700 px-1.5 py-0.5 rounded font-mono font-semibold">Acc La</code> (Latitude) และ <code class="bg-slate-100 text-emerald-700 px-1.5 py-0.5 rounded font-mono font-semibold">Acclong</code> (Longitude)</p>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-2 text-xs">
+                    <!-- Basemap Selector -->
+                    <select id="mapStyleSelect" onchange="changeBasemap(this.value)" class="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-slate-700 font-medium focus:outline-none">
+                        <option value="topo-vector">Esri Topographic</option>
+                        <option value="streets-vector">Esri Streets</option>
+                        <option value="gray-vector">Esri Dark Gray Canvas</option>
+                        <option value="satellite">Esri Satellite Imagery</option>
+                    </select>
+
+                    <button onclick="zoomToFitAllPoints()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-medium transition flex items-center gap-1 shadow-sm">
+                        <i class="fa-solid fa-expand"></i> ซูมครอบคลุมหมุดทั้งหมด
+                    </button>
+                </div>
+            </div>
+
+            <!-- ArcGIS Map Canvas Container -->
+            <div class="relative">
+                <div id="mapView" class="shadow-inner bg-slate-100"></div>
+                
+                <!-- Map Legend Overlay -->
+                <div class="absolute bottom-4 left-4 bg-white/95 backdrop-blur-md border border-slate-200 p-3.5 rounded-xl shadow-lg text-xs z-10 max-w-xs">
+                    <p class="font-bold text-slate-800 border-b border-slate-200 pb-1.5 mb-2 flex items-center justify-between">
+                        <span>สัญลักษณ์ประเภทยานพาหนะ</span>
+                        <span id="mapPointsCountBadge" class="bg-emerald-100 text-emerald-800 text-[10px] px-2 py-0.5 rounded-full font-semibold">0 หมุด</span>
+                    </p>
+                    <div id="legendPoints" class="space-y-1.5 text-[11px]">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <span class="w-3.5 h-3.5 rounded-full bg-red-600 border-2 border-white shadow inline-block"></span>
+                                <span class="text-slate-700 font-medium">รถจักรยานยนต์</span>
+                            </div>
+                            <i class="fa-solid fa-motorcycle text-red-500"></i>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <span class="w-3.5 h-3.5 rounded-full bg-blue-600 border-2 border-white shadow inline-block"></span>
+                                <span class="text-slate-700 font-medium">รถยนต์ส่วนบุคคล / กระบะ</span>
+                            </div>
+                            <i class="fa-solid fa-car text-blue-500"></i>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <span class="w-3.5 h-3.5 rounded-full bg-amber-500 border-2 border-white shadow inline-block"></span>
+                                <span class="text-slate-700 font-medium">รถบรรทุก / ยานพาหนะใหญ่</span>
+                            </div>
+                            <i class="fa-solid fa-truck text-amber-500"></i>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <span class="w-3.5 h-3.5 rounded-full bg-purple-600 border-2 border-white shadow inline-block"></span>
+                                <span class="text-slate-700 font-medium">คนเดินเท้า / อื่นๆ</span>
+                            </div>
+                            <i class="fa-solid fa-person-walking text-purple-500"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Chart Analytics Section -->
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <!-- Age-Sex Distribution Chart -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                <div class="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+                    <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                        <i class="fa-solid fa-chart-column text-emerald-600"></i>
+                        การกระจายการเสียชีวิตตามกลุ่มอายุและเพศ (Demographic Profile)
+                    </h3>
+                    <span class="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">จำนวนเคส</span>
+                </div>
+                <div class="relative h-64">
+                    <canvas id="chartAgeSex"></canvas>
+                </div>
+            </div>
+
+            <!-- Vehicle Type Breakdown Chart -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                <div class="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+                    <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                        <i class="fa-solid fa-chart-pie text-emerald-600"></i>
+                        สัดส่วนประเภทยานพาหนะของผู้เสียชีวิต (Vehicle Breakdown)
+                    </h3>
+                    <span class="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">สัดส่วน %</span>
+                </div>
+                <div class="relative h-64 flex items-center justify-center">
+                    <canvas id="chartVehicle"></canvas>
+                </div>
+            </div>
+
+            <!-- Temporal Distribution (24 Hours) -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                <div class="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+                    <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                        <i class="fa-solid fa-clock-rotate-left text-emerald-600"></i>
+                        การกระจายการเกิดเหตุตามช่วงเวลาในรอบวัน (24-Hour Temporal Curve)
+                    </h3>
+                    <span class="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">ช่วงเวลาเกิดเหตุ</span>
+                </div>
+                <div class="relative h-64">
+                    <canvas id="chartTimeOfDay"></canvas>
+                </div>
+            </div>
+
+            <!-- Risk Factors Comparison Bar Chart -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                <div class="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+                    <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                        <i class="fa-solid fa-triangle-exclamation text-emerald-600"></i>
+                        ปัจจัยเสี่ยงพฤติกรรมและการเกิดอุบัติเหตุ (Behavioral Risk Factors)
+                    </h3>
+                    <span class="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">ความถี่ปัจจัยเสี่ยง</span>
+                </div>
+                <div class="relative h-64">
+                    <canvas id="chartRiskFactors"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Individual Level Incident Line-List Table -->
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <div>
+                    <h2 class="font-bold text-slate-800 text-base flex items-center gap-2">
+                        <i class="fa-solid fa-table-list text-emerald-600"></i>
+                        ทะเบียนข้อมูลผู้เสียชีวิตรายบุคคลและพิกัด (Casualty Line-List & Coordinates)
+                    </h2>
+                    <p class="text-xs text-slate-500">คลิกปุ่ม <span class="text-emerald-600 font-semibold"><i class="fa-solid fa-location-crosshairs"></i> ปักจุดบนแผนที่</span> เพื่อซูมไปยังตำแหน่งพิกัด Acc La, Acclong บนแผนที่</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="exportCSV()" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition flex items-center gap-1.5">
+                        <i class="fa-solid fa-file-csv text-emerald-600"></i> Export Filtered CSV
+                    </button>
+                    <span id="recordCountBadge" class="bg-emerald-100 text-emerald-800 text-xs font-semibold px-2.5 py-1 rounded-full">
+                        0 เคส
+                    </span>
+                </div>
+            </div>
+
+            <!-- Table Container -->
+            <div class="overflow-x-auto custom-scrollbar border border-slate-200 rounded-lg">
+                <table class="w-full text-left text-xs text-slate-600 whitespace-nowrap">
+                    <thead class="bg-slate-800 text-slate-200 font-medium uppercase tracking-wider">
+                        <tr>
+                            <th class="px-3.5 py-3">ID เคส</th>
+                            <th class="px-3.5 py-3">วัน-เวลาเกิดเหตุ</th>
+                            <th class="px-3.5 py-3">จังหวัด / อำเภอ</th>
+                            <th class="px-3.5 py-3">เพศ / อายุ</th>
+                            <th class="px-3.5 py-3">ยานพาหนะ</th>
+                            <th class="px-3.5 py-3">ปัจจัยเสี่ยงหลัก</th>
+                            <th class="px-3.5 py-3">พิกัด (Acc La, Acclong)</th>
+                            <th class="px-3.5 py-3 text-center">แผนที่</th>
+                            <th class="px-3.5 py-3 text-center">รายละเอียด</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableIncidentBody" class="divide-y divide-slate-200 bg-white">
+                        <!-- Table rows injected dynamically -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination Controls -->
+            <div class="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 text-xs text-slate-500">
+                <div id="paginationInfo">แสดง 0 ถึง 0 จาก 0 รายการ</div>
+                <div class="flex items-center space-x-1" id="paginationControls">
+                    <!-- Pagination buttons dynamically rendered -->
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Modal: Case Details -->
+    <div id="modalCaseDetail" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+            <div class="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+                <div class="flex items-center space-x-2">
+                    <i class="fa-solid fa-file-medical text-emerald-400 text-lg"></i>
+                    <h3 class="font-bold text-base">รายงานการสอบสวนโรคและพิกัดจุดเกิดเหตุ</h3>
+                </div>
+                <button onclick="closeModal('modalCaseDetail')" class="text-slate-400 hover:text-white transition">
+                    <i class="fa-solid fa-xmark text-xl"></i>
+                </button>
+            </div>
+            
+            <div id="modalCaseContent" class="p-6 overflow-y-auto custom-scrollbar space-y-4 text-sm text-slate-700">
+                <!-- Dynamic Content -->
+            </div>
+
+            <div class="bg-slate-50 px-6 py-3 border-t border-slate-200 flex justify-end">
+                <button onclick="closeModal('modalCaseDetail')" class="px-4 py-2 bg-slate-800 text-white rounded-lg text-xs font-medium hover:bg-slate-700 transition">
+                    ปิดหน้าต่าง
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Data Source Configuration -->
+    <div id="modalDataSettings" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden">
+            <div class="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+                <h3 class="font-bold text-base flex items-center gap-2">
+                    <i class="fa-solid fa-link text-emerald-400"></i>
+                    ตั้งค่าการเชื่อมต่อ Google Sheets CSV
+                </h3>
+                <button onclick="closeModal('modalDataSettings')" class="text-slate-400 hover:text-white transition">
+                    <i class="fa-solid fa-xmark text-xl"></i>
+                </button>
+            </div>
+
+            <div class="p-6 space-y-4 text-xs text-slate-600">
+                <div>
+                    <label class="block font-semibold text-slate-800 mb-1">URL Google Sheets Published (HTML หรือ CSV):</label>
+                    <input type="text" id="inputSheetUrl" class="w-full border border-slate-300 rounded-lg p-2.5 text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none" placeholder="https://docs.google.com/spreadsheets/d/e/.../pubhtml">
+                    <p class="text-[11px] text-slate-400 mt-1">ระบบรองรับการอ่านพิกัดจากคอลัมน์ <code class="text-emerald-600 font-bold">Acc La</code> และ <code class="text-emerald-600 font-bold">Acclong</code> โดยอัตโนมัติ</p>
+                </div>
+
+                <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1 text-[11px]">
+                    <p class="font-semibold text-slate-700">ชื่อหัวคอลัมน์ที่รองรับ (Header Mapping):</p>
+                    <ul class="list-disc list-inside space-y-0.5 text-slate-500">
+                        <li>Latitude: <code class="text-slate-800">Acc La</code>, <code class="text-slate-800">Acc_La</code>, <code class="text-slate-800">Latitude</code></li>
+                        <li>Longitude: <code class="text-slate-800">Acclong</code>, <code class="text-slate-800">Acc_long</code>, <code class="text-slate-800">Longitude</code></li>
+                        <li>ข้อมูลประกอบ: จังหวัด, อำเภอ, เพศ, อายุ, ยานพาหนะ, ปัจจัยเสี่ยง</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="bg-slate-50 px-6 py-3 border-t border-slate-200 flex justify-end gap-2">
+                <button onclick="closeModal('modalDataSettings')" class="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-300 transition">
+                    ยกเลิก
+                </button>
+                <button onclick="saveCustomSheetUrl()" class="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-500 transition shadow">
+                    บันทึกและซิงค์ข้อมูลใหม่
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application JavaScript Code -->
+    <script>
+        // Default Published Google Sheet CSV endpoint
+        const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSiAbBA8-f1ABcbgy_EtuD_T1CzYUrhvZY6KgVUDdNX2FjcG4lOgizgQ-XAK5pY4a3POTY7zzJdWQ6r/pub?output=csv";
+        
+        let activeSheetUrl = localStorage.getItem('rti_sheet_url') || DEFAULT_SHEET_URL;
+
+        // Global State Variables
+        let rawIncidentData = [];
+        let filteredIncidentData = [];
+        let autoRefreshTimer = null;
+        let currentPage = 1;
+        const itemsPerPage = 10;
+
+        // ArcGIS Map Global Objects
+        let arcgisMap, arcgisView, graphicsLayer;
+
+        // Chart Instance References
+        let chartAgeSexInstance = null;
+        let chartVehicleInstance = null;
+        let chartTimeOfDayInstance = null;
+        let chartRiskFactorsInstance = null;
+
+        // Comprehensive Fallback Dataset (Representative Thailand RTI Incidents with Acc La & Acclong)
+        const fallbackMockData = [
+            { id: 'RTI-2026-001', date: '14/10/2026', time: '18:30', province: 'ขอนแก่น', district: 'น้ำพอง', gender: 'ชาย', age: 24, vehicle: 'จักรยานยนต์', risk: 'ไม่สวมหมวกนิรภัย', acc_la: 16.7028, acclong: 102.8124, status: 'เสียชีวิตในที่เกิดเหตุ' },
+            { id: 'RTI-2026-002', date: '14/10/2026', time: '21:15', province: 'กรุงเทพมหานคร', district: 'จตุจักร', gender: 'ชาย', age: 31, vehicle: 'จักรยานยนต์', risk: 'ดื่มแล้วขับ', acc_la: 13.8164, acclong: 100.5601, status: 'เสียชีวิตที่โรงพยาบาล' },
+            { id: 'RTI-2026-003', date: '13/10/2026', time: '08:45', province: 'เชียงใหม่', district: 'เมืองเชียงใหม่', gender: 'หญิง', age: 19, vehicle: 'จักรยานยนต์', risk: 'ขับรถเร็วเกินกำหนด', acc_la: 18.7883, acclong: 98.9853, status: 'เสียชีวิตในที่เกิดเหตุ' },
+            { id: 'RTI-2026-004', date: '13/10/2026', time: '15:20', province: 'ชลบุรี', district: 'บางแสน', gender: 'ชาย', age: 45, vehicle: 'รถกระบะ', risk: 'ไม่คาดเข็มขัดนิรภัย', acc_la: 13.2831, acclong: 100.9152, status: 'เสียชีวิตที่โรงพยาบาล' },
+            { id: 'RTI-2026-005', date: '12/10/2026', time: '02:10', province: 'นครราชสีมา', district: 'ปากช่อง', gender: 'ชาย', age: 28, vehicle: 'จักรยานยนต์', risk: 'ดื่มแล้วขับ', acc_la: 14.6932, acclong: 101.4128, status: 'เสียชีวิตในที่เกิดเหตุ' },
+            { id: 'RTI-2026-006', date: '12/10/2026', time: '17:50', province: 'ภูเก็ต', district: 'กะทู้', gender: 'ชาย', age: 52, vehicle: 'รถยนต์ส่วนบุคคล', risk: 'ขับรถเร็วเกินกำหนด', acc_la: 7.8925, acclong: 98.3307, status: 'เสียชีวิตที่โรงพยาบาล' },
+            { id: 'RTI-2026-007', date: '11/10/2026', time: '19:40', province: 'สงขลา', district: 'หาดใหญ่', gender: 'หญิง', age: 67, vehicle: 'คนเดินเท้า', risk: 'ข้ามถนนตัดหน้า', acc_la: 7.0087, acclong: 100.4746, status: 'เสียชีวิตในที่เกิดเหตุ' },
+            { id: 'RTI-2026-008', date: '11/10/2026', time: '22:05', province: 'สุราษฎร์ธานี', district: 'เมืองสุราษฎร์ธานี', gender: 'ชาย', age: 22, vehicle: 'จักรยานยนต์', risk: 'ไม่สวมหมวกนิรภัย', acc_la: 9.1382, acclong: 99.3218, status: 'เสียชีวิตในที่เกิดเหตุ' },
+            { id: 'RTI-2026-009', date: '10/10/2026', time: '14:15', province: 'อุบลราชธานี', district: 'วารินชำราบ', gender: 'ชาย', age: 38, vehicle: 'รถบรรทุก', risk: 'หลับใน / อ่อนล้า', acc_la: 15.1950, acclong: 104.8580, status: 'เสียชีวิตที่โรงพยาบาล' },
+            { id: 'RTI-2026-010', date: '10/10/2026', time: '16:30', province: 'ขอนแก่น', district: 'เมืองขอนแก่น', gender: 'หญิง', age: 16, vehicle: 'จักรยานยนต์', risk: 'ไม่สวมหมวกนิรภัย', acc_la: 16.4322, acclong: 102.8236, status: 'เสียชีวิตในที่เกิดเหตุ' },
+            { id: 'RTI-2026-011', date: '09/10/2026', time: '20:10', province: 'เชียงราย', district: 'แม่สาย', gender: 'ชาย', age: 29, vehicle: 'จักรยานยนต์', risk: 'ดื่มแล้วขับ', acc_la: 20.4320, acclong: 99.8820, status: 'เสียชีวิตในที่เกิดเหตุ' },
+            { id: 'RTI-2026-012', date: '09/10/2026', time: '11:00', province: 'พิษณุโลก', district: 'เมืองพิษณุโลก', gender: 'ชาย', age: 41, vehicle: 'รถกระบะ', risk: 'ตัดหน้ากระชั้นชิด', acc_la: 16.8211, acclong: 100.2659, status: 'เสียชีวิตที่โรงพยาบาล' }
+        ];
+
+        // Initialize Esri ArcGIS Map Engine
+        function initArcGISMap() {
+            require([
+                "esri/Map",
+                "esri/views/MapView",
+                "esri/Graphic",
+                "esri/layers/GraphicsLayer"
+            ], function(Map, MapView, Graphic, GraphicsLayer) {
+
+                arcgisMap = new Map({
+                    basemap: "topo-vector"
+                });
+
+                graphicsLayer = new GraphicsLayer({ title: "Incident Pins" });
+                arcgisMap.add(graphicsLayer);
+
+                arcgisView = new MapView({
+                    container: "mapView",
+                    map: arcgisMap,
+                    center: [100.5018, 13.7563], // Thailand Center Coordinate
+                    zoom: 6
+                });
+
+                arcgisView.when(() => {
+                    console.log("ArcGIS Map View Loaded.");
+                    fetchLiveCSVData();
+                });
+            });
+        }
+
+        // Coordinate Extractor Helper for Acc La & Acclong
+        function extractCoordinates(row) {
+            let lat = null;
+            let lng = null;
+
+            // Flexible Column Search for Latitude
+            for (const key in row) {
+                const k = key.trim().toLowerCase().replace(/\s+/g, '');
+                if (k === 'accla' || k === 'acc_la' || k === 'lat' || k === 'latitude' || k.includes('ละติจูด')) {
+                    lat = parseCoordinateValue(row[key]);
+                    if (lat !== null) break;
+                }
+            }
+
+            // Flexible Column Search for Longitude
+            for (const key in row) {
+                const k = key.trim().toLowerCase().replace(/\s+/g, '');
+                if (k === 'acclong' || k === 'acc_long' || k === 'acclng' || k === 'lng' || k === 'long' || k === 'longitude' || k.includes('ลองจิจูด')) {
+                    lng = parseCoordinateValue(row[key]);
+                    if (lng !== null) break;
+                }
+            }
+
+            if (lat === null || lng === null) {
+                if (row['acc_la'] !== undefined) lat = parseCoordinateValue(row['acc_la']);
+                if (row['acclong'] !== undefined) lng = parseCoordinateValue(row['acclong']);
+            }
+
+            // Validate geographic bounds
+            if (lat !== null && lng !== null && !isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 && (lat !== 0 || lng !== 0)) {
+                return { lat, lng };
+            }
+
+            return null;
+        }
+
+        function parseCoordinateValue(val) {
+            if (val === null || val === undefined || val === '') return null;
+            if (typeof val === 'number') return isNaN(val) ? null : val;
+            let str = String(val).trim().replace(',', '.');
+            let num = parseFloat(str);
+            return isNaN(num) ? null : num;
+        }
+
+        // Fetch Data from Google Sheets CSV Endpoint
+        async function fetchLiveCSVData() {
+            setLoadingState(true);
+
+            try {
+                let csvUrl = activeSheetUrl;
+                if (csvUrl.includes('/pubhtml')) {
+                    csvUrl = csvUrl.replace(/\/pubhtml.*/, '/pub?output=csv');
+                }
+
+                // Add cache-busting parameter
+                const cacheBusterUrl = `${csvUrl}${csvUrl.includes('?') ? '&' : '?'}t=${new Date().getTime()}`;
+
+                const response = await fetch(cacheBusterUrl);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                const csvText = await response.text();
+
+                Papa.parse(csvText, {
+                    header: true,
+                    skipEmptyLines: true,
+                    dynamicTyping: true,
+                    complete: function(results) {
+                        if (results.data && results.data.length > 0) {
+                            processCSVData(results.data);
+                        } else {
+                            processCSVData(fallbackMockData);
+                        }
+                        setLoadingState(false);
+                    },
+                    error: function(err) {
+                        console.warn("PapaParse error, falling back to mock data:", err);
+                        processCSVData(fallbackMockData);
+                        setLoadingState(false);
+                    }
+                });
+
+            } catch (error) {
+                console.warn("CSV Fetch error, using default dataset:", error);
+                processCSVData(fallbackMockData);
+                setLoadingState(false);
+            }
+        }
+
+        function processCSVData(dataArray) {
+            rawIncidentData = [];
+
+            dataArray.forEach((row, index) => {
+                const coords = extractCoordinates(row);
+                const vehicleType = row['ยานพาหนะ'] || row['Vehicle'] || row['vehicle'] || 'จักรยานยนต์';
+                const ageVal = parseInt(row['อายุ'] || row['Age'] || row['age']) || 0;
+
+                rawIncidentData.push({
+                    id: row['ID'] || row['id'] || row['เลขรหัส'] || `RTI-2026-${String(index + 1).padStart(3, '0')}`,
+                    date: row['วันที่'] || row['วันที่เกิดเหตุ'] || row['Date'] || row['date'] || '14/10/2026',
+                    time: row['เวลา'] || row['เวลาเกิดเหตุ'] || row['Time'] || row['time'] || '18:00',
+                    province: row['จังหวัด'] || row['Province'] || row['province'] || 'ไม่ระบุ',
+                    district: row['อำเภอ'] || row['District'] || row['district'] || 'เมือง',
+                    gender: row['เพศ'] || row['Sex'] || row['Gender'] || row['gender'] || 'ชาย',
+                    age: ageVal,
+                    vehicle: vehicleType,
+                    risk: row['ปัจจัยเสี่ยง'] || row['Risk'] || row['risk'] || 'ไม่สวมหมวกนิรภัย',
+                    status: row['สถานะ'] || row['Status'] || 'เสียชีวิตในที่เกิดเหตุ',
+                    lat: coords ? coords.lat : null,
+                    lng: coords ? coords.lng : null,
+                    rawRow: row
+                });
+            });
+
+            populateProvinceFilter();
+            applyFilters();
+            document.getElementById('lastUpdateText').textContent = `อัปเดตล่าสุด: ${new Date().toLocaleTimeString('th-TH')}`;
+        }
+
+        function populateProvinceFilter() {
+            const provinceSelect = document.getElementById('filterProvince');
+            const currentVal = provinceSelect.value;
+            const provinces = [...new Set(rawIncidentData.map(d => d.province).filter(Boolean))].sort();
+
+            provinceSelect.innerHTML = '<option value="ALL">ทั้งหมดทุกจังหวัด</option>';
+            provinces.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                provinceSelect.appendChild(opt);
+            });
+
+            provinceSelect.value = currentVal;
+        }
+
+        // Apply Filters & Redraw Interface
+        function applyFilters() {
+            const selectedProvince = document.getElementById('filterProvince').value;
+            const selectedVehicle = document.getElementById('filterVehicle').value;
+            const selectedAgeGroup = document.getElementById('filterAgeGroup').value;
+            const selectedRisk = document.getElementById('filterRisk').value;
+            const searchText = document.getElementById('filterSearch').value.toLowerCase().trim();
+
+            filteredIncidentData = rawIncidentData.filter(item => {
+                if (selectedProvince !== 'ALL' && item.province !== selectedProvince) return false;
+                if (selectedVehicle !== 'ALL' && !item.vehicle.includes(selectedVehicle)) return false;
+
+                if (selectedAgeGroup !== 'ALL') {
+                    if (selectedAgeGroup === '0-14' && !(item.age >= 0 && item.age <= 14)) return false;
+                    if (selectedAgeGroup === '15-24' && !(item.age >= 15 && item.age <= 24)) return false;
+                    if (selectedAgeGroup === '25-59' && !(item.age >= 25 && item.age <= 59)) return false;
+                    if (selectedAgeGroup === '60+' && !(item.age >= 60)) return false;
+                }
+
+                if (selectedRisk !== 'ALL' && !item.risk.includes(selectedRisk)) return false;
+
+                if (searchText !== '') {
+                    const matchText = `${item.id} ${item.province} ${item.district} ${item.vehicle} ${item.risk} ${item.gender}`.toLowerCase();
+                    if (!matchText.includes(searchText)) return false;
+                }
+
+                return true;
+            });
+
+            currentPage = 1;
+            updateKPICards();
+            renderMapPoints();
+            renderCharts();
+            renderIncidentTable();
+        }
+
+        function resetFilters() {
+            document.getElementById('filterProvince').value = 'ALL';
+            document.getElementById('filterVehicle').value = 'ALL';
+            document.getElementById('filterAgeGroup').value = 'ALL';
+            document.getElementById('filterRisk').value = 'ALL';
+            document.getElementById('filterSearch').value = '';
+            applyFilters();
+        }
+
+        // Render Mapped Markers on Esri ArcGIS Layer
+        function renderMapPoints() {
+            if (!arcgisView || !graphicsLayer) return;
+
+            require(["esri/Graphic"], function(Graphic) {
+                graphicsLayer.removeAll();
+                let validGraphics = [];
+
+                filteredIncidentData.forEach(item => {
+                    if (item.lat !== null && item.lng !== null) {
+                        
+                        let markerColor = [220, 38, 38, 0.9]; // Red (Motorcycle)
+                        if (item.vehicle.includes('รถยนต์') || item.vehicle.includes('กระบะ')) {
+                            markerColor = [37, 99, 235, 0.9]; // Blue
+                        } else if (item.vehicle.includes('บรรทุก') || item.vehicle.includes('ใหญ่')) {
+                            markerColor = [217, 119, 6, 0.9]; // Amber
+                        } else if (item.vehicle.includes('คนเดินเท้า')) {
+                            markerColor = [147, 51, 234, 0.9]; // Purple
+                        }
+
+                        const pointGeometry = {
+                            type: "point",
+                            longitude: item.lng,
+                            latitude: item.lat
+                        };
+
+                        const simpleMarkerSymbol = {
+                            type: "simple-marker",
+                            style: "circle",
+                            color: markerColor,
+                            size: "13px",
+                            outline: {
+                                color: [255, 255, 255, 1],
+                                width: 2
+                            }
+                        };
+
+                        const popupTemplate = {
+                            title: `<div style="font-family:'Kanit',sans-serif; font-weight:700; color:#0f172a;"><i class="fa-solid fa-triangle-exclamation text-red-600"></i> เคสอุบัติเหตุ: ${item.id}</div>`,
+                            content: `
+                                <div style="font-family:'Kanit',sans-serif; font-size:13px; line-height:1.6; color:#334155;">
+                                    <p style="margin-bottom:4px;"><b>วัน-เวลาเกิดเหตุ:</b> ${item.date} (${item.time} น.)</p>
+                                    <p style="margin-bottom:4px;"><b>สถานที่:</b> อ.${item.district} จ.${item.province}</p>
+                                    <p style="margin-bottom:4px;"><b>ผู้ประสบเหตุ:</b> เพศ${item.gender} (อายุ ${item.age} ปี)</p>
+                                    <p style="margin-bottom:4px;"><b>ยานพาหนะ:</b> <span style="color:#0284c7; font-weight:600;">${item.vehicle}</span></p>
+                                    <p style="margin-bottom:4px;"><b>ปัจจัยเสี่ยง:</b> <span style="color:#dc2626; font-weight:600;">${item.risk}</span></p>
+                                    <p style="margin-bottom:0px;"><b>พิกัด (Acc La, Acclong):</b> <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-family:monospace; color:#16a34a;">${item.lat.toFixed(6)}, ${item.lng.toFixed(6)}</code></p>
+                                </div>
+                            `
+                        };
+
+                        const pointGraphic = new Graphic({
+                            geometry: pointGeometry,
+                            symbol: simpleMarkerSymbol,
+                            attributes: item,
+                            popupTemplate: popupTemplate
+                        });
+
+                        graphicsLayer.add(pointGraphic);
+                        validGraphics.push(pointGraphic);
+                    }
+                });
+
+                const mappedCount = validGraphics.length;
+                document.getElementById('kpiMappedPoints').textContent = mappedCount.toLocaleString();
+                document.getElementById('mapPointsCountBadge').textContent = `${mappedCount} หมุด`;
+
+                const mappedPct = filteredIncidentData.length > 0 ? ((mappedCount / filteredIncidentData.length) * 100).toFixed(1) : 0;
+                document.getElementById('kpiMappedPct').textContent = `${mappedPct}% ปักจุดแล้ว`;
+
+                if (validGraphics.length > 0) {
+                    arcgisView.goTo(validGraphics, { duration: 800 }).catch(() => {});
+                }
+            });
+        }
+
+        function zoomToFitAllPoints() {
+            if (graphicsLayer && graphicsLayer.graphics.length > 0) {
+                arcgisView.goTo(graphicsLayer.graphics.toArray(), { duration: 1000 });
+            }
+        }
+
+        function zoomToSpecificIncident(lat, lng, caseId) {
+            if (!arcgisView || lat === null || lng === null) return;
+
+            arcgisView.goTo({
+                center: [lng, lat],
+                zoom: 15
+            }, { duration: 1200 }).then(() => {
+                const graphic = graphicsLayer.graphics.find(g => g.attributes && g.attributes.id === caseId);
+                if (graphic) {
+                    arcgisView.openPopup({
+                        features: [graphic],
+                        location: graphic.geometry
+                    });
+                }
+            });
+
+            document.getElementById('mapView').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function changeBasemap(basemapStyle) {
+            if (arcgisMap) {
+                arcgisMap.basemap = basemapStyle;
+            }
+        }
+
+        // Calculate KPI Metrics
+        function updateKPICards() {
+            const total = filteredIncidentData.length;
+            document.getElementById('kpiTotalFatalities').textContent = total.toLocaleString();
+
+            if (total === 0) {
+                document.getElementById('kpiSexRatio').textContent = "0:0";
+                document.getElementById('kpiTopVehicle').textContent = "-";
+                document.getElementById('kpiTopVehiclePct').textContent = "0%";
+                document.getElementById('kpiHighRiskAge').textContent = "-";
+                document.getElementById('kpiTopRisk').textContent = "-";
+                return;
+            }
+
+            const males = filteredIncidentData.filter(d => d.gender === 'ชาย').length;
+            const females = filteredIncidentData.filter(d => d.gender === 'หญิง').length;
+            document.getElementById('kpiSexRatio').textContent = `${males}:${females}`;
+
+            const vehicleCounts = {};
+            filteredIncidentData.forEach(d => { vehicleCounts[d.vehicle] = (vehicleCounts[d.vehicle] || 0) + 1; });
+            const topVehicle = Object.keys(vehicleCounts).reduce((a, b) => vehicleCounts[a] > vehicleCounts[b] ? a : b, '-');
+            const topVehiclePct = ((vehicleCounts[topVehicle] / total) * 100).toFixed(1);
+            document.getElementById('kpiTopVehicle').textContent = topVehicle;
+            document.getElementById('kpiTopVehiclePct').textContent = `${topVehiclePct}% ของทั้งหมด`;
+
+            const ageGroups = { '0-14': 0, '15-24': 0, '25-59': 0, '60+': 0 };
+            filteredIncidentData.forEach(d => {
+                if (d.age <= 14) ageGroups['0-14']++;
+                else if (d.age <= 24) ageGroups['15-24']++;
+                else if (d.age <= 59) ageGroups['25-59']++;
+                else ageGroups['60+']++;
+            });
+            const topAge = Object.keys(ageGroups).reduce((a, b) => ageGroups[a] > ageGroups[b] ? a : b, '-');
+            const ageLabels = { '0-14': 'เด็ก (0-14 ปี)', '15-24': 'เยาวชน (15-24 ปี)', '25-59': 'วัยทำงาน (25-59 ปี)', '60+': 'ผู้สูงอายุ (60+ ปี)' };
+            document.getElementById('kpiHighRiskAge').textContent = ageLabels[topAge] || topAge;
+
+            const riskCounts = {};
+            filteredIncidentData.forEach(d => { riskCounts[d.risk] = (riskCounts[d.risk] || 0) + 1; });
+            const topRisk = Object.keys(riskCounts).reduce((a, b) => riskCounts[a] > riskCounts[b] ? a : b, '-');
+            document.getElementById('kpiTopRisk').textContent = topRisk;
+        }
+
+        // Render Chart.js Visualizations
+        function renderCharts() {
+            renderAgeSexChart();
+            renderVehicleChart();
+            renderTimeOfDayChart();
+            renderRiskFactorsChart();
+        }
+
+        function renderAgeSexChart() {
+            const ctx = document.getElementById('chartAgeSex').getContext('2d');
+            const categories = ['0-14 ปี', '15-24 ปี', '25-59 ปี', '60 ปีขึ้นไป'];
+            const maleData = [0, 0, 0, 0];
+            const femaleData = [0, 0, 0, 0];
+
+            filteredIncidentData.forEach(d => {
+                let idx = 0;
+                if (d.age <= 14) idx = 0;
+                else if (d.age <= 24) idx = 1;
+                else if (d.age <= 59) idx = 2;
+                else idx = 3;
+
+                if (d.gender === 'ชาย') maleData[idx]++;
+                else if (d.gender === 'หญิง') femaleData[idx]++;
+            });
+
+            if (chartAgeSexInstance) chartAgeSexInstance.destroy();
+
+            chartAgeSexInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: categories,
+                    datasets: [
+                        { label: 'เพศชาย', data: maleData, backgroundColor: '#2563eb', borderRadius: 4 },
+                        { label: 'เพศหญิง', data: femaleData, backgroundColor: '#ec4899', borderRadius: 4 }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top' } },
+                    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+                }
+            });
+        }
+
+        function renderVehicleChart() {
+            const ctx = document.getElementById('chartVehicle').getContext('2d');
+            const counts = {};
+            filteredIncidentData.forEach(d => { counts[d.vehicle] = (counts[d.vehicle] || 0) + 1; });
+
+            const labels = Object.keys(counts);
+            const dataVals = Object.values(counts);
+
+            if (chartVehicleInstance) chartVehicleInstance.destroy();
+
+            chartVehicleInstance = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels.length > 0 ? labels : ['ไม่มีข้อมูล'],
+                    datasets: [{
+                        data: dataVals.length > 0 ? dataVals : [1],
+                        backgroundColor: ['#ef4444', '#3b82f6', '#f59e0b', '#8b5cf6', '#10b981', '#64748b']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'right' } }
+                }
+            });
+        }
+
+        function renderTimeOfDayChart() {
+            const ctx = document.getElementById('chartTimeOfDay').getContext('2d');
+            const hours = ['00:00-04:00', '04:01-08:00', '08:01-12:00', '12:01-16:00', '16:01-20:00', '20:01-23:59'];
+            const hourCounts = [0, 0, 0, 0, 0, 0];
+
+            filteredIncidentData.forEach(d => {
+                const hour = parseInt(String(d.time).split(':')[0]) || 12;
+                if (hour >= 0 && hour < 4) hourCounts[0]++;
+                else if (hour >= 4 && hour < 8) hourCounts[1]++;
+                else if (hour >= 8 && hour < 12) hourCounts[2]++;
+                else if (hour >= 12 && hour < 16) hourCounts[3]++;
+                else if (hour >= 16 && hour < 20) hourCounts[4]++;
+                else hourCounts[5]++;
+            });
+
+            if (chartTimeOfDayInstance) chartTimeOfDayInstance.destroy();
+
+            chartTimeOfDayInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: hours,
+                    datasets: [{
+                        label: 'จำนวนอุบัติเหตุ',
+                        data: hourCounts,
+                        borderColor: '#16a34a',
+                        backgroundColor: 'rgba(22, 163, 74, 0.15)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 5,
+                        pointBackgroundColor: '#15803d'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+                }
+            });
+        }
+
+        function renderRiskFactorsChart() {
+            const ctx = document.getElementById('chartRiskFactors').getContext('2d');
+            const riskCounts = {};
+            filteredIncidentData.forEach(d => { riskCounts[d.risk] = (riskCounts[d.risk] || 0) + 1; });
+
+            if (chartRiskFactorsInstance) chartRiskFactorsInstance.destroy();
+
+            chartRiskFactorsInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: Object.keys(riskCounts),
+                    datasets: [{
+                        label: 'ความถี่เคส',
+                        data: Object.values(riskCounts),
+                        backgroundColor: '#f43f5e',
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { x: { beginAtZero: true, ticks: { precision: 0 } } }
+                }
+            });
+        }
+
+        // Render Incident Table
+        function renderIncidentTable() {
+            const tbody = document.getElementById('tableIncidentBody');
+            tbody.innerHTML = '';
+
+            const totalRecords = filteredIncidentData.length;
+            document.getElementById('recordCountBadge').textContent = `${totalRecords.toLocaleString()} เคส`;
+
+            if (totalRecords === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="9" class="px-4 py-8 text-center text-slate-400">
+                            <i class="fa-solid fa-folder-open text-3xl mb-2 block"></i>
+                            ไม่พบข้อมูลอุบัติเหตุตามเงื่อนไขตัวกรอง
+                        </td>
+                    </tr>`;
+                document.getElementById('paginationInfo').textContent = 'แสดง 0 รายการ';
+                document.getElementById('paginationControls').innerHTML = '';
+                return;
+            }
+
+            const totalPages = Math.ceil(totalRecords / itemsPerPage);
+            if (currentPage > totalPages) currentPage = totalPages;
+
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, totalRecords);
+            const pageData = filteredIncidentData.slice(startIndex, endIndex);
+
+            pageData.forEach((item) => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-50 transition border-b border-slate-100";
+
+                const hasCoords = item.lat !== null && item.lng !== null;
+                const coordBadge = hasCoords 
+                    ? `<span class="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-mono text-[11px] font-semibold"><i class="fa-solid fa-check text-emerald-500"></i> ${item.lat.toFixed(4)}, ${item.lng.toFixed(4)}</span>`
+                    : `<span class="bg-slate-100 text-slate-400 px-2 py-0.5 rounded font-mono text-[11px]">ไม่มีพิกัด</span>`;
+
+                const mapBtn = hasCoords
+                    ? `<button onclick="zoomToSpecificIncident(${item.lat}, ${item.lng}, '${item.id}')" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-medium transition text-[11px] flex items-center gap-1 shadow-sm mx-auto">
+                        <i class="fa-solid fa-location-crosshairs"></i> ปักจุด
+                       </button>`
+                    : `<span class="text-slate-300 text-[11px]">-</span>`;
+
+                tr.innerHTML = `
+                    <td class="px-3.5 py-3 font-semibold text-slate-800">${item.id}</td>
+                    <td class="px-3.5 py-3 text-slate-600">${item.date} (${item.time} น.)</td>
+                    <td class="px-3.5 py-3 text-slate-800 font-medium">จ.${item.province} <span class="text-slate-400 text-[11px]">(${item.district})</span></td>
+                    <td class="px-3.5 py-3 text-slate-600">${item.gender} / ${item.age} ปี</td>
+                    <td class="px-3.5 py-3"><span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded font-medium text-[11px]">${item.vehicle}</span></td>
+                    <td class="px-3.5 py-3"><span class="bg-rose-50 text-rose-700 px-2 py-0.5 rounded font-medium text-[11px]">${item.risk}</span></td>
+                    <td class="px-3.5 py-3">${coordBadge}</td>
+                    <td class="px-3.5 py-3 text-center">${mapBtn}</td>
+                    <td class="px-3.5 py-3 text-center">
+                        <button onclick="showCaseDetail('${item.id}')" class="text-slate-500 hover:text-emerald-600 text-sm p-1 transition">
+                            <i class="fa-solid fa-file-lines"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            document.getElementById('paginationInfo').textContent = `แสดง ${startIndex + 1} ถึง ${endIndex} จาก ${totalRecords.toLocaleString()} รายการ`;
+            renderPaginationControls(totalPages);
+        }
+
+        function renderPaginationControls(totalPages) {
+            const container = document.getElementById('paginationControls');
+            container.innerHTML = '';
+
+            if (totalPages <= 1) return;
+
+            const prevBtn = document.createElement('button');
+            prevBtn.className = `px-2.5 py-1 rounded border text-xs font-medium ${currentPage === 1 ? 'border-slate-200 text-slate-300 cursor-not-allowed' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`;
+            prevBtn.innerHTML = `<i class="fa-solid fa-chevron-left"></i>`;
+            prevBtn.disabled = currentPage === 1;
+            prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; renderIncidentTable(); } };
+            container.appendChild(prevBtn);
+
+            for (let i = 1; i <= Math.min(totalPages, 5); i++) {
+                const pageBtn = document.createElement('button');
+                pageBtn.className = `px-2.5 py-1 rounded border text-xs font-medium ${currentPage === i ? 'bg-emerald-600 text-white border-emerald-600' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`;
+                pageBtn.textContent = i;
+                pageBtn.onclick = () => { currentPage = i; renderIncidentTable(); };
+                container.appendChild(pageBtn);
+            }
+
+            const nextBtn = document.createElement('button');
+            nextBtn.className = `px-2.5 py-1 rounded border text-xs font-medium ${currentPage === totalPages ? 'border-slate-200 text-slate-300 cursor-not-allowed' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`;
+            nextBtn.innerHTML = `<i class="fa-solid fa-chevron-right"></i>`;
+            nextBtn.disabled = currentPage === totalPages;
+            nextBtn.onclick = () => { if (currentPage < totalPages) { currentPage++; renderIncidentTable(); } };
+            container.appendChild(nextBtn);
+        }
+
+        // Show Case Modal
+        function showCaseDetail(caseId) {
+            const item = rawIncidentData.find(d => d.id === caseId);
+            if (!item) return;
+
+            const content = document.getElementById('modalCaseContent');
+            content.innerHTML = `
+                <div class="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs">
+                    <div><span class="text-slate-400">รหัสเคส:</span> <b class="text-slate-800">${item.id}</b></div>
+                    <div><span class="text-slate-400">สถานะ:</span> <span class="text-red-600 font-semibold">${item.status}</span></div>
+                    <div><span class="text-slate-400">วัน-เวลาเกิดเหตุ:</span> ${item.date} (${item.time} น.)</div>
+                    <div><span class="text-slate-400">พื้นที่:</span> อ.${item.district} จ.${item.province}</div>
+                    <div><span class="text-slate-400">เพศ/อายุ:</span> ${item.gender} / ${item.age} ปี</div>
+                    <div><span class="text-slate-400">ยานพาหนะ:</span> <b class="text-blue-600">${item.vehicle}</b></div>
+                    <div class="col-span-2"><span class="text-slate-400">ปัจจัยเสี่ยงหลัก:</span> <b class="text-rose-600">${item.risk}</b></div>
+                    <div class="col-span-2 bg-white p-3 rounded-lg border border-slate-200">
+                        <span class="text-slate-500 font-semibold block mb-1">พิกัดทางภูมิศาสตร์ (Acc La, Acclong):</span>
+                        <p class="font-mono text-emerald-700 bg-slate-50 p-2 rounded border border-slate-200">
+                            Latitude (Acc La): ${item.lat ? item.lat : 'ไม่มีข้อมูล'}<br>
+                            Longitude (Acclong): ${item.lng ? item.lng : 'ไม่มีข้อมูล'}
+                        </p>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('modalCaseDetail').classList.remove('hidden');
+        }
+
+        function toggleDataModal() {
+            const modal = document.getElementById('modalDataSettings');
+            document.getElementById('inputSheetUrl').value = activeSheetUrl;
+            modal.classList.toggle('hidden');
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.add('hidden');
+        }
+
+        function saveCustomSheetUrl() {
+            const urlInput = document.getElementById('inputSheetUrl').value.trim();
+            if (urlInput) {
+                activeSheetUrl = urlInput;
+                localStorage.setItem('rti_sheet_url', urlInput);
+                closeModal('modalDataSettings');
+                fetchLiveCSVData();
+            }
+        }
+
+        function changeAutoRefresh() {
+            const intervalVal = parseInt(document.getElementById('autoRefreshInterval').value);
+            if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+
+            if (intervalVal > 0) {
+                autoRefreshTimer = setInterval(fetchLiveCSVData, intervalVal);
+            }
+        }
+
+        function setLoadingState(isLoading) {
+            const icon = document.getElementById('refreshIcon');
+            const dot = document.getElementById('syncStatusDot');
+            const statusText = document.getElementById('syncStatusText');
+
+            if (isLoading) {
+                if (icon) icon.classList.add('animate-spin');
+                if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-amber-400 pulse-indicator";
+                if (statusText) statusText.textContent = "กำลังซิงค์ข้อมูล...";
+            } else {
+                if (icon) icon.classList.remove('animate-spin');
+                if (dot) dot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 pulse-indicator";
+                if (statusText) statusText.textContent = "เชื่อมต่อพิกัดสมบูรณ์";
+            }
+        }
+
+        function exportCSV() {
+            if (filteredIncidentData.length === 0) return;
+            
+            const csvRows = [];
+            csvRows.push(['ID', 'Date', 'Time', 'Province', 'District', 'Gender', 'Age', 'Vehicle', 'Risk', 'Acc_La', 'Acclong']);
+
+            filteredIncidentData.forEach(d => {
+                csvRows.push([
+                    `"${d.id}"`, `"${d.date}"`, `"${d.time}"`, `"${d.province}"`, `"${d.district}"`,
+                    `"${d.gender}"`, d.age, `"${d.vehicle}"`, `"${d.risk}"`, d.lat || '', d.lng || ''
+                ]);
+            });
+
+            const csvString = csvRows.map(e => e.join(",")).join("\n");
+            const blob = new Blob(["\ufeff" + csvString], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", `RTI_Incidents_AccLa_Acclong_${new Date().toISOString().slice(0,10)}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Initialize Application
+        window.addEventListener('DOMContentLoaded', () => {
+            initArcGISMap();
+            changeAutoRefresh();
+        });
+    </script>
+</body>
+</html>
